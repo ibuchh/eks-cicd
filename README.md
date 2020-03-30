@@ -1,16 +1,60 @@
-# eks-workshop-sample-api-service-go
+# CI/CD using AWS CodePipeline with Amazon EKS | Worskhop
+## Objectives
 
-A sample Kubernetes service used in the [EKS Workshop](https://eksworkshop.com/) CI/CD Pipeline module.
+* Learn about creating an Amazon EKS cluster
+* Learn about AWS CodePipeline, AWS CodeBuild services
+* Gain familiarity with DevSecOps
 
-The Dockerfile is a [multi-stage](https://docs.docker.com/develop/develop-images/multistage-build/) build that
-compiles the Go application and then packages it in a minimal image that pulls from [scratch](https://hub.docker.com/_/scratch/).
-The size of this Docker image is ~ 3.2 MiB.
 
-The buildspec.yml file is used by the [AWS CodeBuild](https://aws.amazon.com/codebuild/) stage. In this file, it pulls down
-kubectl, builds the container image, pushes the image to [Amazon ECR](https://aws.amazon.com/ecr/) and then deploys the change to the
-[Amazon EKS Cluster](https://aws.amazon.com/eks/).
+## Create Amazon EKS cluster (Linux/Mac)
+```
+export EKS_CLUSTER=eks-cluster
 
-In the hello-k8s.yml file, you will find the Kubernetes [service](https://kubernetes.io/docs/concepts/services-networking/service/) and
-[deployment](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) definitions. The service is configured with
-a [LoadBalancer](https://kubernetes.io/docs/tasks/access-application-cluster/create-external-load-balancer/) which prompts Kubernetes
-to launch an external load balancer using an [AWS ELB](https://aws.amazon.com/elasticloadbalancing/).
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+
+sudo mv -v /tmp/eksctl /usr/local/bin
+
+eksctl version
+
+eksctl create cluster --name=$EKS_CLUSTER --version=1.15 --nodes=3 --profile=dev-profile --region=us-east-1
+
+(... _This takes about 15 minutes to complete_ ...)
+
+kubectl get nodes
+```
+
+## Create an IAM Role
+
+To deploy a sample service to Amazon EKS using AWS CodeBuild inside AWS CodePipeline, we need to create an AWS Identity and Access Management (IAM) role. This IAM role will enable AWS CodeBuild to interact with Amazon EKS.
+
+
+```
+export EKS_CODEBUILD_KUBECTL_ROLE=EksWorkshopCodeBuildKubectlRole
+
+export ACCOUNT_ID=`aws sts get-caller-identity --output text --query Account`
+
+TRUST="{ \"Version\": \"2012-10-17\", \"Statement\": [ { \"Effect\": \"Allow\", \"Principal\": { \"AWS\": \"arn:aws:iam::${ACCOUNT_ID}:root\" }, \"Action\": \"sts:AssumeRole\" } ] }"
+
+echo '{ "Version": "2012-10-17", "Statement": [ { "Effect": "Allow", "Action": "eks:Describe*", "Resource": "*" } ] }' > /tmp/iam-role-policy
+
+aws iam create-role --role-name $EKS_CODEBUILD_KUBECTL_ROLE --assume-role-policy-document "$TRUST" --output text --query 'Role.Arn'
+
+aws iam put-role-policy --role-name EksWorkshopCodeBuildKubectlRole --policy-name eks-describe --policy-document file:///tmp/iam-role-policy
+```
+
+## Modify aws-auth ConfigMap
+
+Let us add the role to the aws-auth ConfigMap for the EKS cluster so that kubectl in the CodeBuild stage of the pipeline will be able to interact with the EKS cluster via the IAM role.
+
+```
+ROLE="    - rolearn: arn:aws:iam::$ACCOUNT_ID:role/$EKS_CODEBUILD_KUBECTL_ROLE\n      username: build\n      groups:\n        - system:masters"
+
+kubectl get -n kube-system configmap/aws-auth -o yaml | awk "/mapRoles: \|/{print;print \"$ROLE\";next}1" > /tmp/aws-auth-patch.yml
+
+kubectl patch configmap/aws-auth -n kube-system --patch "$(cat /tmp/aws-auth-patch.yml)"
+```
+
+## Reference Architecture
+At the conclusion of this workshop, you will end up with various AWS services provisioned in your AWS account. The following diagram illustrates some of these services and is intended as a sample reference architecture. 
+
+![Alt](/src/assets/images/DevSecOps.png "Architecture")
