@@ -1,4 +1,4 @@
-# CI/CD using AWS CodePipeline with Amazon EKS | Worskhop
+# CI/CD using AWS CodePipeline with Amazon EKS
 ## Objectives
 
 * Learn about creating an Amazon EKS cluster
